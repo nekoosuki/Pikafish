@@ -1,6 +1,6 @@
 /*
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
-  Copyright (C) 2004-2022 The Stockfish developers (see AUTHORS file)
+  Copyright (C) 2004-2023 The Stockfish developers (see AUTHORS file)
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -33,15 +33,19 @@ using std::string;
 namespace Stockfish {
 
 UCI::OptionsMap Options; // Global object
+uint8_t MateThreatDepth = 1;
+bool ChineseRule = false;
 
 namespace UCI {
 
 /// 'On change' actions, triggered by an option's value change
-void on_clear_hash(const Option&) { Search::clear(); }
-void on_hash_size(const Option& o) { TT.resize(size_t(o)); }
-void on_logger(const Option& o) { start_logger(o); }
-void on_threads(const Option& o) { Threads.set(size_t(o)); }
-void on_eval_file(const Option& ) { Eval::NNUE::init(); }
+static void on_clear_hash(const Option&) { Search::clear(); }
+static void on_hash_size(const Option& o) { TT.resize(size_t(o)); }
+static void on_logger(const Option& o) { start_logger(o); }
+static void on_threads(const Option& o) { Threads.set(size_t(o)); }
+static void on_mate_threat_depth(const Option& o) { MateThreatDepth = size_t(o); }
+static void on_repetition_rule(const Option& o) { ChineseRule = o == "ChineseRule"; }
+static void on_eval_file(const Option& ) { Eval::NNUE::init(); }
 
 /// Our case insensitive less() function as required by UCI protocol
 bool CaseInsensitiveLess::operator() (const string& s1, const string& s2) const {
@@ -66,7 +70,8 @@ void init(OptionsMap& o) {
   o["Move Overhead"]         << Option(10, 0, 5000);
   o["Slow Mover"]            << Option(100, 10, 1000);
   o["nodestime"]             << Option(0, 0, 10000);
-  o["UCI_AnalyseMode"]       << Option(false);
+  o["Mate Threat Depth"]     << Option(1, 0, 10, on_mate_threat_depth);
+  o["Repetition Rule"]       << Option("AsianRule var AsianRule var ChineseRule", "AsianRule" , on_repetition_rule);
   o["UCI_ShowWDL"]           << Option(false);
   o["EvalFile"]              << Option(EvalFileDefaultName, on_eval_file);
 }
@@ -116,9 +121,9 @@ Option::Option(double v, int minv, int maxv, OnChange f) : type("spin"), min(min
 Option::Option(const char* v, const char* cur, OnChange f) : type("combo"), min(0), max(0), on_change(f)
 { defaultValue = v; currentValue = cur; }
 
-Option::operator double() const {
+Option::operator int() const {
   assert(type == "check" || type == "spin");
-  return (type == "spin" ? stof(currentValue) : currentValue == "true");
+  return (type == "spin" ? std::stoi(currentValue) : currentValue == "true");
 }
 
 Option::operator std::string() const {

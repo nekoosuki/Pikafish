@@ -1,6 +1,6 @@
 /*
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
-  Copyright (C) 2004-2022 The Stockfish developers (see AUTHORS file)
+  Copyright (C) 2004-2023 The Stockfish developers (see AUTHORS file)
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -31,7 +31,7 @@ class Position;
 namespace Eval {
 
   std::string trace(Position& pos);
-  Value evaluate(const Position& pos, int* complexity = nullptr);
+  Value evaluate(const Position& pos);
 
   extern std::string currentEvalFileName;
 
@@ -42,15 +42,8 @@ namespace Eval {
 
   namespace NNUE {
 
-    std::string trace(Position& pos);
-    Value evaluate(const Position& pos, int* complexity = nullptr);
-
     void init();
     void verify();
-
-    bool load_eval(std::string name, std::istream& stream);
-    bool save_eval(std::ostream& stream);
-    bool save_eval(const std::optional<std::string>& filename);
 
   } // namespace NNUE
 

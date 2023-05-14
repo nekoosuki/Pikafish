@@ -1,6 +1,6 @@
 /*
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
-  Copyright (C) 2004-2022 The Stockfish developers (see AUTHORS file)
+  Copyright (C) 2004-2023 The Stockfish developers (see AUTHORS file)
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -239,8 +239,8 @@ template<> inline int distance<File>(Square x, Square y) { return std::abs(file_
 template<> inline int distance<Rank>(Square x, Square y) { return std::abs(rank_of(x) - rank_of(y)); }
 template<> inline int distance<Square>(Square x, Square y) { return SquareDistance[x][y]; }
 
-inline int edge_distance(File f) { return std::min(f, File(FILE_H - f)); }
-inline int edge_distance(Rank r) { return std::min(r, Rank(RANK_8 - r)); }
+inline int edge_distance(File f) { return std::min(f, File(FILE_I - f)); }
+inline int edge_distance(Rank r) { return std::min(r, Rank(RANK_9 - r)); }
 
 
 /// attacks_bb(Square) returns the pseudo attacks of the give piece type

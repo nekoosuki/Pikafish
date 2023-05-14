@@ -1,6 +1,6 @@
 /*
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
-  Copyright (C) 2004-2022 The Stockfish developers (see AUTHORS file)
+  Copyright (C) 2004-2023 The Stockfish developers (see AUTHORS file)
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -38,8 +38,10 @@ namespace Stockfish {
 struct StateInfo {
 
   // Copied when making a move
-  Value  material[COLOR_NB];
-  int    pliesFromNull;
+  Value   material[COLOR_NB];
+  int16_t check10[COLOR_NB];
+  int     rule60;
+  int     pliesFromNull;
 
   // Not copied when making a move (will be recomputed anyhow)
   Key        key;
@@ -48,8 +50,8 @@ struct StateInfo {
   Bitboard   blockersForKing[COLOR_NB];
   Bitboard   pinners[COLOR_NB];
   Bitboard   checkSquares[PIECE_TYPE_NB];
+  bool       needSlowCheck;
   Piece      capturedPiece;
-  uint16_t   chased;
   Move       move;
 
   // Used by NNUE
@@ -62,7 +64,7 @@ struct StateInfo {
 /// start position to the position just before the search starts). Needed by
 /// 'draw by repetition' detection. Use a std::deque because pointers to
 /// elements are not invalidated upon list resizing.
-typedef std::unique_ptr<std::deque<StateInfo>> StateListPtr;
+using StateListPtr = std::unique_ptr<std::deque<StateInfo>>;
 
 
 /// Position class stores information regarding the board representation as
@@ -86,11 +88,9 @@ public:
 
   // Position representation
   Bitboard pieces(PieceType pt) const;
-  Bitboard pieces(PieceType pt1, PieceType pt2) const;
+  template<typename ...PieceTypes> Bitboard pieces(PieceType pt, PieceTypes... pts) const;
   Bitboard pieces(Color c) const;
-  Bitboard pieces(Color c, PieceType pt) const;
-  Bitboard pieces(Color c, PieceType pt1, PieceType pt2) const;
-  Bitboard pieces(Color c, PieceType pt1, PieceType pt2, PieceType pt3) const;
+  template<typename ...PieceTypes> Bitboard pieces(Color c, PieceTypes... pts) const;
   Piece piece_on(Square s) const;
   bool empty(Square s) const;
   template<PieceType Pt> int count(Color c) const;
@@ -127,6 +127,7 @@ public:
   void undo_null_move();
 
   // Static Exchange Evaluation
+  bool see_ge(Move m, Bitboard& occupied, Value threshold = VALUE_ZERO) const;
   bool see_ge(Move m, Value threshold = VALUE_ZERO) const;
 
   // Accessing hash keys
@@ -137,7 +138,9 @@ public:
   Color side_to_move() const;
   int game_ply() const;
   Thread* this_thread() const;
-  bool is_repeated(Value& result, int ply = 0) const;
+  bool rule_judge(Value& result, int ply = 0) const;
+  int rule60_count() const;
+  bool has_mate_threat(Depth d = -1);
   ChaseMap chased(Color c);
   Value material_sum() const;
   Value material_diff() const;
@@ -154,15 +157,17 @@ public:
 
 private:
   // Initialization helpers (used while setting up a position)
-  void set_state(StateInfo* si) const;
-  void set_check_info(StateInfo* si) const;
+  void set_state() const;
+  void set_check_info() const;
 
   // Other helpers
   void move_piece(Square from, Square to);
   std::pair<Piece, int> light_do_move(Move m);
   void light_undo_move(Move m, Piece captured, int id = 0);
-  void set_chase_info(int d);
-  bool chase_legal(Move m, Bitboard b) const;
+  Value detect_chases(int d, int ply = 0);
+  bool chase_legal(Move m, Bitboard b = 0) const;
+  template<bool AfterMove>
+  Key adjust_key60(Key k) const;
 
   // Data members
   Piece board[SQUARE_NB];
@@ -181,7 +186,7 @@ private:
   int idBoard[SQUARE_NB];
 };
 
-extern std::ostream& operator<<(std::ostream& os, const Position& pos);
+std::ostream& operator<<(std::ostream& os, const Position& pos);
 
 inline Color Position::side_to_move() const {
   return sideToMove;
@@ -204,24 +209,18 @@ inline Bitboard Position::pieces(PieceType pt = ALL_PIECES) const {
   return byTypeBB[pt];
 }
 
-inline Bitboard Position::pieces(PieceType pt1, PieceType pt2) const {
-  return pieces(pt1) | pieces(pt2);
+template<typename ...PieceTypes>
+inline Bitboard Position::pieces(PieceType pt, PieceTypes... pts) const {
+  return pieces(pt) | pieces(pts...);
 }
 
 inline Bitboard Position::pieces(Color c) const {
   return byColorBB[c];
 }
 
-inline Bitboard Position::pieces(Color c, PieceType pt) const {
-  return pieces(c) & pieces(pt);
-}
-
-inline Bitboard Position::pieces(Color c, PieceType pt1, PieceType pt2) const {
-  return pieces(c) & (pieces(pt1) | pieces(pt2));
-}
-
-inline Bitboard Position::pieces(Color c, PieceType pt1, PieceType pt2, PieceType pt3) const {
-  return pieces(c) & (pieces(pt1) | pieces(pt2) | pieces(pt3));
+template<typename ...PieceTypes>
+inline Bitboard Position::pieces(Color c, PieceTypes... pts) const {
+  return pieces(c) & pieces(pts...);
 }
 
 template<PieceType Pt> inline int Position::count(Color c) const {
@@ -275,7 +274,14 @@ inline Bitboard Position::check_squares(PieceType pt) const {
 }
 
 inline Key Position::key() const {
-  return st->key;
+  return adjust_key60<false>(st->key);
+}
+
+template<bool AfterMove>
+inline Key Position::adjust_key60(Key k) const
+{
+    return st->rule60 < 14 - AfterMove
+               ? k : k ^ make_key((st->rule60 - (14 - AfterMove)) / 8);
 }
 
 inline Value Position::material_sum() const {
@@ -287,7 +293,11 @@ inline Value Position::material_diff() const {
 }
 
 inline int Position::game_ply() const {
-    return gamePly;
+  return gamePly;
+}
+
+inline int Position::rule60_count() const {
+  return st->rule60;
 }
 
 inline bool Position::capture(Move m) const {
@@ -346,12 +356,12 @@ inline StateInfo* Position::state() const {
 
 inline Position& Position::set(const Position& pos, StateInfo* si, Thread* th) {
 
-    set(pos.fen(), si, th);
+  set(pos.fen(), si, th);
 
-    // Special cares for bloom filter
-    std::memcpy(&filter, &pos.filter, sizeof(BloomFilter));
+  // Special cares for bloom filter
+  std::memcpy(&filter, &pos.filter, sizeof(BloomFilter));
 
-    return *this;
+  return *this;
 }
 
 } // namespace Stockfish

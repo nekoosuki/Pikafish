@@ -1,6 +1,6 @@
 /*
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
-  Copyright (C) 2004-2022 The Stockfish developers (see AUTHORS file)
+  Copyright (C) 2004-2023 The Stockfish developers (see AUTHORS file)
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include <sstream>
 #include <string>
 
+#include "benchmark.h"
 #include "evaluate.h"
 #include "movegen.h"
 #include "position.h"
@@ -30,12 +31,11 @@
 #include "timeman.h"
 #include "tt.h"
 #include "uci.h"
+#include "nnue/evaluate_nnue.h"
 
 using namespace std;
 
 namespace Stockfish {
-
-extern vector<string> setup_bench(const Position&, istream&);
 
 namespace {
 
@@ -160,7 +160,7 @@ namespace {
     uint64_t num, nodes = 0, cnt = 1;
 
     vector<string> list = setup_bench(pos, args);
-    num = count_if(list.begin(), list.end(), [](string s) { return s.find("go ") == 0 || s.find("eval") == 0; });
+    num = count_if(list.begin(), list.end(), [](const string& s) { return s.find("go ") == 0 || s.find("eval") == 0; });
 
     TimePoint elapsed = now();
 
@@ -206,13 +206,17 @@ namespace {
      // The coefficients of a third-order polynomial fit is based on the fishtest data
      // for two parameters that need to transform eval to the argument of a logistic
      // function.
-     double as[] = { 0.50379905,  -4.12755858,  18.95487051, 152.00733652};
-     double bs[] = {-1.71790378,  10.71543602, -17.05515898,  41.15680404};
+     constexpr double as[] = {  7.42211754, -26.5119614,   46.99271939, 340.67524114 };
+     constexpr double bs[] = { -0.50136481,   4.9383151,  -11.86324223,  89.56581513 };
+
+     // Enforce that NormalizeToPawnValue corresponds to a 50% win rate at ply 64
+     static_assert(UCI::NormalizeToPawnValue == int(as[0] + as[1] + as[2] + as[3]));
+
      double a = (((as[0] * m + as[1]) * m + as[2]) * m) + as[3];
      double b = (((bs[0] * m + bs[1]) * m + bs[2]) * m) + bs[3];
 
      // Transform the eval to centipawns with limited range
-     double x = std::clamp(double(100 * v) / PawnValueEg, -2000.0, 2000.0);
+     double x = std::clamp(double(v), -4000.0, 4000.0);
 
      // Return the win rate in per mille units rounded to the nearest value
      return int(0.5 + 1000 / (1 + std::exp((a - x) / b)));
@@ -223,7 +227,7 @@ namespace {
 
 /// UCI::loop() waits for a command from the stdin, parses it and then calls the appropriate
 /// function. It also intercepts an end-of-file (EOF) indication from the stdin to ensure a
-/// graceful exit if the GUI dies unexpectedly. When called with some command-line arguments, 
+/// graceful exit if the GUI dies unexpectedly. When called with some command-line arguments,
 /// like running 'bench', the function returns immediately after the command is executed.
 /// In addition to the UCI ones, some additional debug commands are also supported.
 
@@ -290,7 +294,7 @@ void UCI::loop(int argc, char* argv[]) {
                        "\nIt is released as free software licensed under the GNU GPLv3 License."
                        "\nPikafish is normally used with a graphical user interface (GUI) and implements"
                        "\nthe Universal Chess Interface (UCI) protocol to communicate with a GUI, an API, etc."
-                       "\nFor any further information, visit https://github.com/PikaCat-OuO/Pikafish#readme"
+                       "\nFor any further information, visit https://github.com/official-pikafish/Pikafish#readme"
                        "\nor read the corresponding README.md and Copying.txt files distributed along with this program.\n" << sync_endl;
       else if (!token.empty() && token[0] != '#')
           sync_cout << "Unknown command: '" << cmd << "'. Type help for more information." << sync_endl;
@@ -312,7 +316,7 @@ string UCI::value(Value v) {
   stringstream ss;
 
   if (abs(v) < VALUE_MATE_IN_MAX_PLY)
-      ss << "cp " << v;
+      ss << "cp " << v * 100 / NormalizeToPawnValue;
   else
       ss << "mate " << (v > 0 ? VALUE_MATE - v + 1 : -VALUE_MATE - v) / 2;
 
@@ -350,14 +354,14 @@ std::string UCI::square(Square s) {
 
 string UCI::move(Move m) {
 
-  Square from = from_sq(m);
-  Square to = to_sq(m);
-
   if (m == MOVE_NONE)
       return "(none)";
 
   if (m == MOVE_NULL)
       return "0000";
+
+  Square from = from_sq(m);
+  Square to = to_sq(m);
 
   string move = UCI::square(from) + UCI::square(to);
 
@@ -366,12 +370,9 @@ string UCI::move(Move m) {
 
 
 /// UCI::to_move() converts a string representing a move in coordinate notation
-/// (g1f3, a7a8q) to the corresponding legal Move, if any.
+/// (g1f3, a7a8) to the corresponding legal Move, if any.
 
 Move UCI::to_move(const Position& pos, string& str) {
-
-  if (str.length() == 5)
-      str[4] = char(tolower(str[4])); // The promotion piece character must be lowercased
 
   for (const auto& m : MoveList<LEGAL>(pos))
       if (str == UCI::move(m))

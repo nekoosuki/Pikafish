@@ -1,6 +1,6 @@
 /*
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
-  Copyright (C) 2004-2022 The Stockfish developers (see AUTHORS file)
+  Copyright (C) 2004-2023 The Stockfish developers (see AUTHORS file)
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -33,6 +33,8 @@
 #include "thread.h"
 #include "uci.h"
 
+#include "nnue/evaluate_nnue.h"
+
 using namespace std;
 
 namespace Stockfish {
@@ -55,11 +57,12 @@ namespace Eval {
 
     vector<string> dirs = { "" , CommandLine::binaryDirectory };
 
-    for (string directory : dirs)
+    for (const string& directory : dirs)
         if (currentEvalFileName != eval_file)
         {
             ifstream stream(directory + eval_file, ios::binary);
-            if (load_eval(eval_file, stream))
+            stringstream ss = read_zipped_nnue(directory + eval_file);
+            if (NNUE::load_eval(eval_file, stream) || NNUE::load_eval(eval_file, ss))
                 currentEvalFileName = eval_file;
         }
   }
@@ -95,7 +98,7 @@ namespace Trace {
 
   enum Tracing { NO_TRACE, TRACE };
 
-  double to_cp(Value v) { return double(v) / PawnValueEg; }
+  static double to_cp(Value v) { return double(v) / UCI::NormalizeToPawnValue; }
 }
 
 using namespace Trace;
@@ -103,19 +106,20 @@ using namespace Trace;
 /// evaluate() is the evaluator for the outer world. It returns a static
 /// evaluation of the position from the point of view of the side to move.
 
-Value Eval::evaluate(const Position& pos, int* complexity) {
+Value Eval::evaluate(const Position& pos) {
 
-  int nnueComplexity;
-  Value v = NNUE::evaluate(pos, &nnueComplexity);
-  // Blend nnue complexity with material complexity
-  nnueComplexity = (104 * nnueComplexity + 131 * abs(v - pos.material_diff())) / 256;
-  if (complexity) // Return hybrid NNUE complexity to caller
-      *complexity = nnueComplexity;
+  assert(!pos.checkers());
 
-  int scale = 1064 + 106 * pos.material_sum() / 5120;
+  Value v = NNUE::evaluate(pos, true);
+
+  // scale nnue score according to material and optimism
+  int scale = 668 + 16 * pos.material_sum() / 1024;
   Value optimism = pos.this_thread()->optimism[pos.side_to_move()];
-  optimism = optimism * (269 + nnueComplexity) / 256;
-  v = (v * scale + optimism * (scale - 754)) / 1024;
+  optimism = optimism * (281 + (401 + optimism) * abs(pos.material_diff() - v) / 1024) / 256;
+  v = (v * scale + optimism * (scale - 740)) / 1024;
+
+  // Damp down the evaluation linearly when shuffling
+  v = v * (205 - pos.rule60_count()) / 120;
 
   // Guarantee evaluation does not hit the mate range
   v = std::clamp(v, VALUE_MATED_IN_MAX_PLY + 1, VALUE_MATE_IN_MAX_PLY - 1);
